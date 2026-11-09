@@ -42,7 +42,7 @@ jobs:
           $version = (Get-Content apps/codex-plus-manager/package.json -Raw | ConvertFrom-Json).version
           if ($version -ne '2.4.0') { throw "Unexpected source version: $version" }
           $cargo = Get-Content Cargo.toml -Raw
-          if ($cargo -notmatch '(?m)^version = "2\.4\.0"$') { throw 'Unexpected Cargo workspace version' }
+          if ($cargo -notmatch '(?m)^version = "2\.4\.0"\r?$') { throw 'Unexpected Cargo workspace version' }
 
       - name: Install frontend dependencies
         working-directory: apps/codex-plus-manager
