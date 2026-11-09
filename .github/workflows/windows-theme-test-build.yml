@@ -39,18 +39,34 @@ jobs:
       - name: Cache speech native libraries
         uses: actions/cache@v4
         with:
-          path: target/sherpa-onnx-prebuilt
-          key: sherpa-onnx-1.13.8-windows-x64
+          path: ${{ runner.temp }}/codex-sherpa-native-1.13.8
+          key: sherpa-onnx-1.13.8-windows-x64-complete-v2
 
-      - name: Refresh native build metadata when library cache is missing
+      - name: Restore and verify speech native libraries
         shell: pwsh
         run: |
-          $nativeLibraries = @(Get-ChildItem -LiteralPath target/sherpa-onnx-prebuilt -Filter sherpa-onnx-c-api.lib -Recurse -File -ErrorAction SilentlyContinue)
-          if ($nativeLibraries.Count -eq 0) {
-            # 仅刷新该依赖，触发其官方 build.rs 重新下载；保留其他 Rust 缓存。
-            cargo clean --release -p sherpa-onnx-sys
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # 对应 sherpa-onnx-sys 1.13.8 官方 build.rs 的 Windows 静态库归档。
+          # 使用独立、可验证的目录，避免复用 Rust 缓存中的失效原生库路径。
+          $nativeRoot = Join-Path $env:RUNNER_TEMP 'codex-sherpa-native-1.13.8'
+          $archiveName = 'sherpa-onnx-v1.13.8-win-x64-static-MT-Release-lib.tar.bz2'
+          New-Item -ItemType Directory -Path $nativeRoot -Force | Out-Null
+          $required = @('sherpa-onnx-c-api','sherpa-onnx-core','kaldi-decoder-core','sherpa-onnx-kaldifst-core','sherpa-onnx-fstfar','sherpa-onnx-fst','kaldi-native-fbank-core','kissfft-float','piper_phonemize','espeak-ng','ucd','onnxruntime','ssentencepiece_core')
+          $candidate = Get-ChildItem -LiteralPath $nativeRoot -Filter sherpa-onnx-c-api.lib -Recurse -File | Select-Object -First 1
+          $complete = $candidate -and (@($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $candidate.DirectoryName "$_.lib")) }).Count -eq 0)
+          if (-not $complete) {
+            $archivePath = Join-Path $nativeRoot $archiveName
+            Invoke-WebRequest -Uri "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$archiveName" -OutFile $archivePath
+            tar.exe -xf $archivePath -C $nativeRoot
+            if ($LASTEXITCODE -ne 0) { throw 'Native archive extraction failed' }
+            $candidate = Get-ChildItem -LiteralPath $nativeRoot -Filter sherpa-onnx-c-api.lib -Recurse -File | Select-Object -First 1
           }
+          if (-not $candidate) { throw 'Speech native library directory not found' }
+          foreach ($name in $required) {
+            $lib = Get-Item -LiteralPath (Join-Path $candidate.DirectoryName "$name.lib") -ErrorAction Stop
+            if ($lib.Length -eq 0) { throw "Empty native library: $name" }
+          }
+          "SHERPA_ONNX_LIB_DIR=$($candidate.DirectoryName)" >> $env:GITHUB_ENV
+          Write-Output "Verified all $($required.Count) speech native libraries."
 
       - name: Check unchanged version
         shell: pwsh
