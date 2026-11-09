@@ -1,0 +1,114 @@
+name: Windows theme test build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Source commit to build
+        required: true
+        default: fbc3868
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows 2.4.0 theme test
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout tested source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-theme-test
+
+      - name: Check unchanged version
+        shell: pwsh
+        run: |
+          $version = (Get-Content apps/codex-plus-manager/package.json -Raw | ConvertFrom-Json).version
+          if ($version -ne '2.4.0') { throw "Unexpected source version: $version" }
+          $cargo = Get-Content Cargo.toml -Raw
+          if ($cargo -notmatch '(?m)^version = "2\.4\.0"$') { throw 'Unexpected Cargo workspace version' }
+
+      - name: Install frontend dependencies
+        working-directory: apps/codex-plus-manager
+        run: npm ci
+
+      - name: Frontend regression tests
+        working-directory: apps/codex-plus-manager
+        run: npm test
+
+      - name: TypeScript check
+        working-directory: apps/codex-plus-manager
+        run: npm run check
+
+      - name: Theme browser dependencies
+        shell: pwsh
+        run: |
+          npm install --prefix "$env:RUNNER_TEMP/theme-shell-tests" --no-save --package-lock=false playwright@1.62.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "NODE_PATH=$env:RUNNER_TEMP/theme-shell-tests/node_modules" >> $env:GITHUB_ENV
+          $browser = @(
+            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+            "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
+          ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $browser) { throw 'Edge not found' }
+          "CODEX_TEST_BROWSER_PATH=$browser" >> $env:GITHUB_ENV
+
+      - name: Theme shell browser regressions
+        shell: pwsh
+        run: |
+          node scripts/assemble-renderer-inject.mjs --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/test-theme-shell-performance.cjs
+
+      - name: Build frontend
+        working-directory: apps/codex-plus-manager
+        run: npm run vite:build
+
+      - name: Build Windows release executable
+        run: cargo build --release --locked -p codex-plus-manager --bin codex-plus-plus
+
+      - name: Package Windows test build
+        shell: pwsh
+        run: |
+          $out = 'dist/windows/theme-test'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item target/release/codex-plus-plus.exe "$out/codex-plus-plus.exe"
+          $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path "$out/codex-plus-plus.exe"))
+          if ($info.ProductVersion -notmatch '^2\.4\.0(?:\.|$)') { throw "Unexpected binary version: $($info.ProductVersion)" }
+          $source = git rev-parse HEAD
+          @(
+            'Codex++ 2.4.0 - Windows theme test build',
+            "Source commit: $source",
+            "ProductVersion: $($info.ProductVersion)",
+            "FileVersion: $($info.FileVersion)",
+            "Workflow: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID",
+            'PR #3008 remains closed pending manual acceptance.'
+          ) | Set-Content "$out/BUILD-INFO.txt" -Encoding utf8
+          Compress-Archive -Path "$out/codex-plus-plus.exe", "$out/BUILD-INFO.txt" -DestinationPath "$out/CodexPlusPlus-2.4.0-windows-x64-theme-test.zip"
+          Get-FileHash "$out/codex-plus-plus.exe", "$out/CodexPlusPlus-2.4.0-windows-x64-theme-test.zip" -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } |
+            Set-Content "$out/SHA256SUMS.txt" -Encoding ascii
+
+      - name: Upload Windows test build
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexPlusPlus-2.4.0-windows-x64-theme-test
+          path: dist/windows/theme-test/*
+          if-no-files-found: error
+          retention-days: 14
