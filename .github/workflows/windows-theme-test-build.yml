@@ -36,6 +36,22 @@ jobs:
         with:
           key: windows-theme-test
 
+      - name: Cache speech native libraries
+        uses: actions/cache@v4
+        with:
+          path: target/sherpa-onnx-prebuilt
+          key: sherpa-onnx-1.13.8-windows-x64
+
+      - name: Refresh native build metadata when library cache is missing
+        shell: pwsh
+        run: |
+          $nativeLibraries = @(Get-ChildItem -LiteralPath target/sherpa-onnx-prebuilt -Filter sherpa-onnx-c-api.lib -Recurse -File -ErrorAction SilentlyContinue)
+          if ($nativeLibraries.Count -eq 0) {
+            # 仅刷新该依赖，触发其官方 build.rs 重新下载；保留其他 Rust 缓存。
+            cargo clean --release -p sherpa-onnx-sys
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
       - name: Check unchanged version
         shell: pwsh
         run: |
