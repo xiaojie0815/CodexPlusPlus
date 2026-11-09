@@ -6,7 +6,7 @@ on:
       source_ref:
         description: Source commit to build
         required: true
-        default: fbc3868
+        default: fix/dream-skin-shell-performance
         type: string
 
 permissions:
@@ -55,6 +55,15 @@ jobs:
       - name: TypeScript check
         working-directory: apps/codex-plus-manager
         run: npm run check
+
+      - name: Safe CSS package and layout tests
+        shell: pwsh
+        run: |
+          "CODEX_THEME_LAYOUT_CSS_OUTPUT=$env:RUNNER_TEMP/theme-layout-compiled.json" >> $env:GITHUB_ENV
+          $env:CODEX_THEME_LAYOUT_CSS_OUTPUT = "$env:RUNNER_TEMP/theme-layout-compiled.json"
+          cargo test --release --locked -p codex-plus-core --test all dream_skin_package::
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path -LiteralPath $env:CODEX_THEME_LAYOUT_CSS_OUTPUT)) { throw 'Compiled layout fixture missing' }
 
       - name: Theme browser dependencies
         shell: pwsh
